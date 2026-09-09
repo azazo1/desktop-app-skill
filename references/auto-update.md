@@ -32,6 +32,7 @@
 ## 资产匹配与下载校验
 
 - 客户端按精确文件名匹配 release 资产: `<app>-<tag>-<platform>-<arch>.<ext>`, 其中 ext 随平台为 linux `tar.gz`, windows `zip`, macos `dmg`; 同一 release 必须存在 `SHA256SUMS` 资产. 匹配不到直接报错.
+- fake 测试构建 (见 SKILL.md 的 fake-dist 章节) 仅版本号为 `v0.0.0`, 更新检测, 资产匹配与安装流程和正式应用完全一致.
 - 先下载 SHA256SUMS, 按归档文件名提取期望摘要; 解析容忍 `*` 二进制标记与 CRLF 行尾, 缺少对应行时报错.
 - 归档流式下载到 `<data_dir>/update/<name>.part`, 边写边计算 sha256, 每个数据块触发进度回调 (received 与 total, total 来自 Content-Length, 可能为 None).
 - 摘要大小写不敏感比对, 不匹配则删除 `.part` 并报错; 匹配后 rename 为正式文件名落盘.

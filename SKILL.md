@@ -65,3 +65,11 @@ debug:
 
 - 安装版与便携版都必须带自动更新: 启动静默检查与手动检查, 下载带 SHA256 校验, 按平台差异安装, 完成后可重启生效.
 - 发布侧的产物命名, SHA256SUMS 生成与版本 tag 流程由 create-github-release-flow skill 保证; 应用内 (客户端) 侧的机制设计见 `references/auto-update.md`, 实现前先通读.
+
+## fake-dist 测试构建
+
+- 提供 `just fake-dist` recipe, 复用 `just dist` 的平台打包路径, 产出专用于自动更新测试的 fake 构建.
+- fake 构建不改包名: bundle id, package id 与应用名和正式应用保持一致, 仅把版本号注入为 `v0.0.0`, 保证任何正式 release 都比它新.
+- 数据目录独立, 不与正式应用共享任何数据; 自动检查开关, 跳过版本等设置的读写隔离在 fake 自己的数据目录内. 单实例锁按规范与数据目录绑定, fake 构建因此可与正式实例并行运行.
+- 本地产物命名在标准命名末尾追加 `-fake` (`<app>-v0.0.0-<platform>-<arch>-fake.<ext>`) 用于区分, release 不上传 fake 变体.
+- fake 构建使用与正式应用完全相同的更新检测逻辑: 匹配标准资产, 下载并安装正式产物, 用于端到端验证更新流程.
