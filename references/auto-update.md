@@ -11,9 +11,9 @@
 
 ## 状态机
 
-`Idle -> Checking -> (UpToDate | Available | Failed)`, `Available -> Downloading -> (ReadyToRestart | DmgOpened | Failed)`.
+`Idle -> Checking -> (UpToDate | Available | Failed)`, `Available -> Downloading -> (ReadyToRestart | DmgOpened | Failed)`; Downloading 可被用户取消, 取消后终止下载任务回到 Available, `.part` 保留供下次续传.
 
-- 更新状态集中存放并加锁, UI 读取不可变快照渲染; 检查, 下载, 安装在后台任务中执行, 状态变化后通知 UI 刷新.
+- 更新状态集中存放并加锁, UI 读取不可变快照渲染; 检查, 下载, 安装在后台任务中执行, 状态变化后通知 UI 刷新. 取消下载时安全终止后台任务, 不得让半途的写入损坏已完成的 `.part` 校验语义.
 - `Failed` 携带用户可读的错误信息; 手动检查失败记 warn, 静默检查失败只记 debug, 不打扰用户.
 
 ## 检查更新
@@ -34,8 +34,8 @@
 - 客户端按精确文件名匹配 release 资产: `<app>-<tag>-<platform>-<arch>.<ext>`, 其中 ext 随平台为 linux `tar.gz`, windows `zip`, macos `dmg`; 同一 release 必须存在 `SHA256SUMS` 资产. 匹配不到直接报错.
 - fake 测试构建 (见 SKILL.md 的 fake-dist 章节) 仅版本号为 `v0.0.0`, 更新检测, 资产匹配与安装流程和正式应用完全一致.
 - 先下载 SHA256SUMS, 按归档文件名提取期望摘要; 解析容忍 `*` 二进制标记与 CRLF 行尾, 缺少对应行时报错.
-- 归档流式下载到 `<data_dir>/update/<name>.part`, 边写边计算 sha256, 每个数据块触发进度回调 (received 与 total, total 来自 Content-Length, 可能为 None).
-- 摘要大小写不敏感比对, 不匹配则删除 `.part` 并报错; 匹配后 rename 为正式文件名落盘.
+- 归档下载到 `<data_dir>/update/<name>.part`, 支持断点续传: 启动下载时若已存在 `.part`, 携带 `Range: bytes=<已下载字节数>-` 请求续传, 服务器返回 206 则追加写入; 返回 200 (对方不支持 Range), `.part` 大小不小于 total 或本地文件异常时, 丢弃 `.part` 从头下载. 每个数据块触发进度回调 (received 与 total, total 来自 Content-Length, 可能为 None).
+- 下载完成后对整个 `.part` 计算 sha256 (续传后增量哈希状态不可复用, 统一整文件计算), 摘要大小写不敏感比对, 不匹配则删除 `.part` 并报错; 匹配后 rename 为正式文件名落盘.
 
 ## 安装策略 (平台差异)
 
@@ -51,5 +51,5 @@
 ## UI 与托盘集成
 
 - 状态栏: 无更新时显示当前版本号; Available / ReadyToRestart / DmgOpened 状态时替换为加粗链接, 引导打开更新窗口.
-- 更新窗口: 当前版本; 各状态对应文案与控件; release notes 滚动区; 下载进度条与已下载字节数; 操作按钮 "立即更新", "跳过此版本" (以 `update.skipped_version` 为键持久化, 静默检查不再提示该版本), "查看 Release 页" 外链, "重启应用", 失败信息与重试.
+- 更新窗口: 当前版本; 各状态对应文案与控件; release notes 滚动区; 下载进度条与已下载字节数; 操作按钮 "立即更新", "取消更新" (仅 Downloading 状态显示, 取消后回到 Available 可再次发起), "跳过此版本" (以 `update.skipped_version` 为键持久化, 静默检查不再提示该版本), "查看 Release 页" 外链, "重启应用", 失败信息与重试. 下载进行中关闭更新窗口不中断下载, 重新打开仍可见进度.
 - 托盘菜单: "检查更新" 项 + "启动时自动检查更新" 勾选项.
