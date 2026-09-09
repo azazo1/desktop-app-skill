@@ -11,10 +11,11 @@
 
 ## 状态机
 
-`Idle -> Checking -> (UpToDate | Available | Failed)`, `Available -> Downloading -> (ReadyToRestart | DmgOpened | Failed)`; Downloading 可被用户取消, 取消后终止下载任务回到 Available, `.part` 保留供下次续传.
+`Idle -> Checking -> (UpToDate | Available | Failed)`, `Available -> Downloading -> (ReadyToRestart | HandedOff | DmgOpened | Failed)`; Downloading 可被用户取消, 取消后终止下载任务回到 Available, `.part` 保留供下次续传.
 
 - 更新状态集中存放并加锁, UI 读取不可变快照渲染; 检查, 下载, 安装在后台任务中执行, 状态变化后通知 UI 刷新. 取消下载时安全终止后台任务, 不得让半途的写入损坏已完成的 `.part` 校验语义.
 - `Failed` 携带用户可读的错误信息; 手动检查失败记 warn, 静默检查失败只记 debug, 不打扰用户.
+- `HandedOff` 表示 macOS 已把 bundle 替换工作交给脱离本进程的脚本, 应用必须尽快走统一退出路径退出, 不能继续驻留 (见 "安装策略" 的 macOS 小节).
 
 ## 检查更新
 
@@ -45,11 +46,23 @@
   - unix 下设置 0o755 可执行权限.
   - 替换成功进入 ReadyToRestart; 用户点击 "重启应用" 时以新二进制启动新进程接管, 当前进程随后走正常退出路径. 若应用实现了单实例锁, 重启前先释放锁, 或锁采用 pid 存活检测, 避免新进程在旧进程退出前抢锁失败而直接退出.
   - 每次启动时清理上次更新遗留的 `.old` 备份, 文件被占用则静默留待下次.
-- macos: 产物是 dmg, 程序内无法静默替换已安装的 `.app` (权限与签名限制), 只能用系统方式挂载并打开 dmg, 引导用户手动拖拽安装, 状态进入 DmgOpened, UI 提示拖入 Applications 后重启. 便携版同样走 dmg 引导.
 - windows 的 release 构建是 GUI 子系统, 没有控制台, 全程错误必须落到日志与 UI, 不能依赖标准错误输出.
+
+### macos: 交接给脱离进程的替换脚本
+
+产物是 dmg, 而进程存活时 LaunchServices 会占用已安装的 `.app`, 直接覆盖会被系统拒绝, 所以不能像 linux / windows 那样在进程内替换自身. 采用的方式是: 应用把替换工作写成一个脚本并立即启动它, 自己随即退出; 脚本等旧进程消失后完成挂载, 替换与重新拉起.
+
+- 前提判断: 只有当前可执行文件确实位于 `<bundle>/Contents/MacOS/<exe>` 结构内才交接替换, 否则视为便携运行 (直接跑二进制, 没有可替换的 bundle), 退回打开 dmg 的手动引导.
+- 脚本由应用生成并落盘到数据目录的 `update/` 下 (如 `apply-update.sh`), 赋予可执行权限后以 `stdin/stdout/stderr` 全 null 的方式 spawn, 保证它不随父进程退出而死; 脚本自身再忽略 SIGHUP. 脚本内容通过参数占位符注入路径, 注入前必须做 shell 单引号转义, 避免带空格或引号的路径破坏脚本.
+- 启动脚本后立刻返回 `HandedOff` 状态, UI 显示 "正在退出并替换, 请勿手动关闭进程" 一类的提示, 应用随即走统一退出路径: 停止后台服务, 刷盘日志, 释放单实例锁. 交接后不应再做任何需要用户等待的交互.
+- 脚本执行顺序: 轮询等待旧 PID 消失 (超过约 60 秒视为放弃, 此时不打开 dmg, 因为应用还活着拖拽同样会被拒), 确认目标 bundle 所在目录可写, 挂载 dmg 并从中定位 `.app`, 用 `ditto` 把新 bundle 复制到 bundle 同目录的暂存路径 (同卷才能保证最后一步 rename 不跨卷), 清除 `com.apple.quarantine` 隔离属性避免替换后首次启动被 Gatekeeper 拦截, 旧 bundle 改名为 `<name>.app.old` 让位, 暂存目录 rename 就位, 删除备份, 最后重新拉起应用.
+- 回滚与失败落盘: 任一步失败都要回滚 (新 bundle 就位失败时把备份移回), 并把可读原因写入 `update/apply-update-result.txt`, 然后立刻 `open` 旧 bundle 把应用重新拉起. 新进程启动时读取该文件, 在更新窗口展示原因, 读取后删除该文件, 展示一直保留到用户下一次主动检查更新.
+- 脚本日志写入 `update/apply-update.log`, 替换完成后保留日志便于排查; 应用每次启动清理上次遗留的 bundle 备份, 替换脚本与残留挂载点目录 (`mount-*`), 但保留日志.
+- 失败提示要区分两类: 旧进程未按时退出时应用仍在运行, 提示用户稍后重新发起更新; 目标目录不可写, 挂载失败, 镜像中没有 `.app` 或复制失败时旧进程已退出, 此时提示手动拖拽安装 (不会再被占用阻挡).
+- 重新拉起应用依赖单实例锁已经释放, 因此退出路径必须真正释放锁, 或锁本身带 pid 存活检测.
 
 ## UI 与托盘集成
 
-- 状态栏: 无更新时显示当前版本号; Available / ReadyToRestart / DmgOpened 状态时替换为加粗链接, 引导打开更新窗口.
-- 更新窗口: 当前版本; 各状态对应文案与控件; release notes 滚动区; 下载进度条与已下载字节数; 操作按钮 "立即更新", "取消更新" (仅 Downloading 状态显示, 取消后回到 Available 可再次发起), "跳过此版本" (以 `update.skipped_version` 为键持久化, 静默检查不再提示该版本), "查看 Release 页" 外链, "重启应用", 失败信息与重试. 下载进行中关闭更新窗口不中断下载, 重新打开仍可见进度.
+- 状态栏: 无更新时显示当前版本号; Available / ReadyToRestart / HandedOff / DmgOpened 状态时替换为加粗链接, 引导打开更新窗口.
+- 更新窗口: 当前版本; 各状态对应文案与控件; release notes 滚动区; 下载进度条与已下载字节数; 操作按钮 "立即更新", "取消更新" (仅 Downloading 状态显示, 取消后回到 Available 可再次发起), "跳过此版本" (以 `update.skipped_version` 为键持久化, 静默检查不再提示该版本), "查看 Release 页" 外链, "重启应用", 失败信息与重试. 下载进行中关闭更新窗口不中断下载, 重新打开仍可见进度. HandedOff 状态下不再提供任何操作按钮, 只显示退出替换中的提示与进度指示.
 - 托盘菜单: "检查更新" 项 + "启动时自动检查更新" 勾选项.
