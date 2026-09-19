@@ -36,8 +36,15 @@ description: 创建桌面 GUI 应用的通用规范约束, 与 GUI 框架无关.
 
 - 后台持续服务类应用: 点击窗口关闭按钮 = 隐藏到托盘并继续运行, 不退出进程. 在窗口关闭事件中取消默认关闭行为, 改为隐藏窗口, macOS 同时隐藏 dock 图标.
 - 必须提供 "启动时隐藏主窗口" 设置项并持久化; 开启后应用启动仅存在于托盘.
-- macOS: dock 图标跟随主窗口显隐, 且是否跟随隐藏提供设置开关, 非 macOS 平台应隐藏该设置项. 实现上通过激活策略或 dock 显隐 API 切换 (如 AppKit 的 Regular/Accessory 策略, Electron 的 `app.dock.hide()`/`show()`), 平台判断封装在守卫函数里, 不散布在调用点; 显示窗口时先恢复 dock, 再显示并聚焦窗口. 同时处理 reopen/activate 事件 (点击 dock 或 Finder 再次打开), 唤起隐藏中的窗口; 注意窗口隐藏后 macOS 可能立刻补发 activate 事件, 需要在隐藏后的短暂窗口期内忽略该事件, 否则窗口会被再次唤起. Electron 的 `app.dock.show()` 返回 Promise, 需捕获失败并记日志.
+- macOS: dock 图标跟随主窗口显隐, 且是否跟随隐藏提供设置开关, 非 macOS 平台应隐藏该设置项. 实现上通过激活策略或 dock 显隐 API 切换 (如 AppKit 的 Regular/Accessory 策略, Electron 的 `app.dock.hide()`/`show()`), 平台判断封装在守卫函数里, 不散布在调用点; 主窗口创建与显示顺序遵循下文 macOS Space 规范. 同时处理 reopen/activate 事件 (点击 dock 或 Finder 再次打开), 唤起隐藏中的窗口; 注意窗口隐藏后 macOS 可能立刻补发 activate 事件, 需要在隐藏后的短暂窗口期内忽略该事件, 否则窗口会被再次唤起. Electron 的 `app.dock.show()` 返回 Promise, 需捕获失败并记日志.
 - 全应用只有一个优雅退出入口 (停服务, 刷日志, 关窗口), 托盘退出, 确认弹窗与信号退出都汇入它.
+
+## macOS Space 归属与唤起
+
+- 用户位于其他应用的原生全屏 Space 时, 启动或唤起本应用的普通主窗口必须将用户带到容纳该窗口的普通桌面. 主窗口不得附着或覆盖在其他应用的全屏 Space 上, 也不得出现焦点已切到普通桌面, 窗口却留在原全屏 Space 的情况.
+- 创建时机与显示顺序都要受控: AppKit 应在首次创建普通主窗口前切换到 `.regular` 激活策略, 避免先以 `.accessory` 身份创建窗口, 显示时才恢复 dock. 启动隐藏时可延迟创建主窗口; 显示已有窗口时, 同样先恢复普通应用身份与 dock, 待框架的异步切换完成后再显示并聚焦. 其他框架使用对应能力, 不把发出激活请求当作切换已经完成.
+- 显式配置普通主窗口角色与 Space 行为, 不依赖辅助应用身份下的默认值; 按目标 SDK 支持的能力设置, 同时保留主窗口自身的原生全屏能力. 不得用 `fullScreenAuxiliary`, `canJoinAllSpaces` 或 `moveToActiveSpace` 等行为把主窗口带入其他应用的全屏 Space; 托盘弹出面板与主窗口的角色应分开处理.
+- 验收时在同一显示器的其他全屏应用 Space 中, 分别覆盖首次启动, 启动隐藏后唤起, 关闭隐藏后再次唤起, 并检查所有主窗口入口. 应同时确认主窗口可见, 未最小化, 处于非全屏状态, 拥有键盘焦点, 且位于当前普通桌面; AppKit 可结合 `isVisible`, `isMiniaturized`, `styleMask`, `isKeyWindow`, `isOnActiveSpace` 与测试全屏窗口的状态判断. 仅观察到应用已激活或焦点切回桌面不算通过; 另验证本应用自身已全屏时仍能正确唤起.
 
 ## 窗口大小记忆与全屏状态
 
