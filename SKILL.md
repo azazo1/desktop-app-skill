@@ -1,6 +1,6 @@
 ---
 name: desktop-app-skill
-description: 创建桌面 GUI 应用的通用规范约束, 与 GUI 框架无关. 当 agent 新建桌面应用项目, 或为现有桌面应用补充托盘图标, 窗口显隐与尺寸记忆, 版本展示, 日志与隔离调试, 终端退出, 自动更新等基础设施时使用.
+description: 创建桌面 GUI 应用的通用规范约束, 与 GUI 框架无关. 当 agent 新建桌面应用项目, 或为现有桌面应用补充安装版分发与打包, 托盘图标, 窗口显隐与尺寸记忆, 版本展示, 日志与隔离调试, 终端退出, 自动更新等基础设施时使用.
 ---
 
 # 桌面 GUI 应用通用规范
@@ -42,7 +42,7 @@ description: 创建桌面 GUI 应用的通用规范约束, 与 GUI 框架无关.
 
 ## 窗口显隐与后台驻留
 
-- 后台持续服务类应用: 点击窗口关闭按钮 = 隐藏到托盘并继续运行, 不退出进程. 在窗口关闭事件中取消默认关闭行为, 改为隐藏窗口, macOS 同时隐藏 dock 图标.
+- 后台持续服务类应用: 点击窗口关闭按钮 = 隐藏到托盘并继续运行, 不退出进程 (更新交接期间例外, 此时关闭按真退出处理, 见自动更新章节). 在窗口关闭事件中取消默认关闭行为, 改为隐藏窗口, macOS 同时隐藏 dock 图标.
 - 必须提供 "启动时隐藏主窗口" 设置项并持久化; 开启后应用启动仅存在于托盘.
 - macOS: dock 图标跟随主窗口显隐, 且是否跟随隐藏提供设置开关, 非 macOS 平台应隐藏该设置项. 实现上通过激活策略或 dock 显隐 API 切换 (如 AppKit 的 Regular/Accessory 策略, Electron 的 `app.dock.hide()`/`show()`), 平台判断封装在守卫函数里, 不散布在调用点; 主窗口创建与显示顺序遵循下文 macOS Space 规范. 同时处理 reopen/activate 事件 (点击 dock 或 Finder 再次打开), 唤起隐藏中的窗口; 注意窗口隐藏后 macOS 可能立刻补发 activate 事件, 需要在隐藏后的短暂窗口期内忽略该事件, 否则窗口会被再次唤起. Electron 的 `app.dock.show()` 返回 Promise, 需捕获失败并记日志.
 - 全应用只有一个优雅退出入口 (停服务, 刷日志, 关窗口), 托盘退出, 确认弹窗与信号退出都汇入它.
@@ -93,16 +93,42 @@ debug:
 - 层级按重要性区分: 关键流程 info, 细节诊断 debug 或 trace, 错误和异常分支包含足够上下文. 计算密集型短流程减少高频日志, 避免拖慢运行; 长时间后台任务 (更新下载, 同步, 批处理等) 必须阶段性输出进度, 防止卡死却无从判断.
 - 日志文案自然, 简洁, 明了, 不堆叠过多字段, 不使用含义不清或过于生僻的缩写.
 
+## 分发形态与安装布局
+
+- 桌面应用默认以安装版分发: 程序文件装在平台标准安装位置, 首次安装与后续升级都由安装程序落地, 安装与卸载都能从系统入口完成. `just dist` 产出当前平台的安装版产物, 这是默认且唯一必须实现的形态.
+- 新建项目或为已有项目补基础设施时, 不要顺带生成便携版形态: 不加便携版 recipe, 不加便携版打包分支, 也不加便携版更新分支. 便携版仅在用户明确要求时按本章末尾的可选形态添加.
+- 分发形态在构建期确定并注入 (例如与构建版本同一注入路径的 `APP_DISTRIBUTION_FORM`); 产物命名按 create-github-release-flow skill 的变体段规则, 此处不复述.
+- Windows 安装版: 用 Inno Setup 生成单文件安装器, 默认 per-user 安装, 不请求提权:
+  - 关键指令: `PrivilegesRequired=lowest`, `DefaultDirName={userpf}\<App>` (即 `%LOCALAPPDATA%\Programs\<App>`), `UsePreviousAppDir=yes` 让升级沿用上次目录; `AppId` 一经发布不得更改, 它决定卸载项名与升级是否追加到同一份卸载日志.
+  - 安装目录只放程序自有文件 (主程序, dll, 资源); 用户数据, 配置与日志一律不放这里.
+  - 卸载项由安装器自动维护, 至少包含 DisplayName, DisplayVersion (随版本更新), Publisher, DisplayIcon, InstallLocation 与 UninstallString; 开始菜单快捷方式建在 `{autoprograms}\<App>`, 桌面快捷方式与开机自启作为可选任务.
+  - 升级就是同一安装器覆盖安装: `[Files]` 中应用私有文件用 `ignoreversion` 保证覆盖, `[InstallDelete]` 清掉上一版本留下而本版本不再提供的私有产物, `[UninstallDelete]` 清掉运行期在安装目录生成的文件. 卸载与升级都不得删除用户数据目录.
+- Linux 安装版: 装到用户级 XDG 位置, 全程不需要 root:
+  - 程序文件放 `~/.local/opt/<app>/`; 启动入口是 `~/.local/bin/<app>` 符号链接; 桌面项写 `~/.local/share/applications/<app>.desktop`, 至少包含 Name, Exec (绝对路径), Icon, Categories, StartupWMClass, Terminal=false; 图标按尺寸放到 `~/.local/share/icons/hicolor/<size>x<size>/apps/<app>.png`.
+  - 安装包是 `-setup.tar.gz`, 内含 `install.sh` 与 `payload/`; `install.sh` 幂等, 支持 `--silent` (非交互, 供应用内升级调用), `--prefix` (默认 `$HOME/.local`), `--wait-pid <pid>`, `--log <path>`, `--result-file <path>`, `--uninstall`.
+  - 安装与升级共用同一个 `install.sh`: 升级按整目录交换而不是逐文件覆盖, 新版新增与移除的文件因此自然对齐, 详见 `references/auto-update.md`.
+  - 脚本只调用确实存在的外部工具 (如 `update-desktop-database`), 工具缺失或调用失败只记日志; 不修改用户的 shell 配置, 也不要求用户手工改 PATH, 只在 `~/.local/bin` 不在 PATH 时提示一次.
+- 数据目录与程序目录分离: 安装版的用户数据 (配置, 状态, 日志, 更新缓存) 走平台用户数据目录, Windows 为 `%APPDATA%\<App>`, Linux 为 `$XDG_DATA_HOME/<app>` (默认 `~/.local/share/<app>`); 环境变量覆盖仍然优先. 安装, 升级与卸载流程都不触碰数据目录.
+
+### 便携版 (可选形态)
+
+- 仅在用户明确要求提供便携版时才实现这一形态: 此时才添加 `just dist-portable` 与对应的打包, 更新分支, 并让形态常量取 portable 值.
+- 便携版的数据目录默认放在可执行文件同级的 `data/` 下, 该位置不可写时回退平台用户数据目录并记 warn; 便携版不写系统目录, 不注册卸载项与快捷方式.
+- 便携版的载荷必须是单文件自包含可执行形态: 便携版的自动更新只替换自身可执行文件 (见 `references/auto-update.md`), 载荷里出现 dll, so 或资源文件时这种形态无法整体升级, 因此这类项目不提供便携版, 只保留安装版.
+
 ## 自动更新
 
-- 安装版与便携版都必须带自动更新: 启动静默检查与手动检查, 下载带 SHA256 校验, 按平台差异安装, 完成后可重启生效;
-- 下载完成不得自动退出或自动重启: 应用停在 "等待重启" 状态继续正常运行, 由用户点击 "重启并更新" 按钮才执行替换与重启;
-- 发布侧的产物命名, SHA256SUMS 生成与版本 tag 流程由 create-github-release-flow skill 保证; 应用内 (客户端) 侧的机制设计见 `references/auto-update.md`, 实现前先通读.
+- 安装版必须带自动更新: 启动静默检查与手动检查, 下载带 SHA256 校验, 完成后可重启生效.
+- 安装版的落地交给平台安装器: Windows 静默运行新版 `-setup.exe`, Linux 静默运行新版 `-setup.tar.gz` 内的 `install.sh`, macOS 沿用 dmg 与脱离进程的替换脚本. 安装器按整目录替换全部程序文件, 因此新版新增的 dll 与资源文件会被补齐, 新版移除的文件会被清理, 不再依赖 "替换单个可执行文件" 的做法.
+- 下载完成不得自动退出或自动重启: 应用停在 "等待重启" 状态继续正常运行, 由用户点击 "重启并更新" 按钮才执行安装器交接与重启.
+- 项目提供可选便携版时, 其更新沿用解包归档替换自身可执行文件的语义, 只在单文件载荷下成立, 见 `references/auto-update.md` 的便携版小节; 主线实现不需要为它预留分支.
+- 发布侧的产物命名, 变体段, SHA256SUMS 生成与版本 tag 流程由 create-github-release-flow skill 保证; 应用内 (客户端) 侧的机制设计见 `references/auto-update.md`, 实现前先通读.
 
 ## fake-dist 测试构建
 
-- 提供 `just fake-dist` recipe, 复用 `just dist` 的平台打包路径, 产出专用于自动更新测试的 fake 构建.
-- fake 构建不改包名: bundle id, package id 与应用名和正式应用保持一致, 仅把版本号注入为 `v0.0.0`, 保证任何正式 release 都比它新.
+- 提供 `just fake-dist` recipe, 复用 `just dist` 的平台打包路径, 产出安装版的 fake 构建; 项目明确提供便携版时才另加 `just fake-dist-portable`.
+- fake 构建不改包名: bundle id, package id, 应用名, Inno Setup 的 `AppId` 与 Linux 的 desktop 项名称都与正式应用一致, 仅把版本号注入为 `v0.0.0`, 保证任何正式 release 都比它新; 安装器自身的版本, 卸载项 DisplayVersion, About 与状态栏显示的版本都必须是 `v0.0.0`.
+- fake 安装版的安装器与 `install.sh` 必须与正式产物同构: 同一份模板与占位符, 只替换版本号, 保证 fake 验证过的落地路径就是正式的落地路径.
 - 数据目录独立, 不与正式应用共享任何数据; 自动检查开关, 跳过版本等设置的读写隔离在 fake 自己的数据目录内. 单实例锁按规范与数据目录绑定, fake 构建因此可与正式实例并行运行.
-- 本地产物命名在标准命名末尾追加 `-fake` (`<app>-v0.0.0-<platform>-<arch>-fake.<ext>`) 用于区分, release 不上传 fake 变体.
-- fake 构建使用与正式应用完全相同的更新检测逻辑: 匹配标准资产, 下载并安装正式产物, 用于端到端验证更新流程.
+- 本地产物命名在标准命名末尾追加 `-fake`, 即 `<app>-v0.0.0-<platform>-<arch>-<variant>-fake.<ext>` (安装版如 `-setup-fake.exe` 与 `-setup-fake.tar.gz`, 便携版如 `-portable-fake.zip` 与 `-portable-fake.tar.gz`) 用于区分, release 不上传 fake 变体.
+- fake 构建使用与正式应用完全相同的更新检测与安装器落地逻辑: 匹配不带 `-fake` 的标准资产, 下载并安装正式产物, 用于端到端验证更新流程. 安装版 fake 的验证必须覆盖 "新版比旧版多一个 dll" 的场景, 确认升级后新 dll 就位且被移除的文件消失.
