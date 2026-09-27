@@ -87,7 +87,7 @@ debug:
     APP_DATA_DIR=target/app-debug APP_LOG_FILE=target/app-debug/app.log RUST_LOG=app=trace cargo run
 ```
 
-- 应用支持环境变量覆盖数据目录与主日志文件路径; 未设置时日志写入数据目录, 按每日与单文件大小轮转并限制留存文件数.
+- 应用支持环境变量覆盖数据目录与主日志文件路径; 未设置时日志写入平台日志位置 (macOS 为 `~/Library/Logs/<Bundle ID>/`, Windows 与 Linux 仍在数据目录内), 按每日与单文件大小轮转并限制留存文件数.
 - 日志基础设施: 使用语言生态的成熟日志设施, 而非 print, console.log 等临时输出; 默认 info 级别, 支持运行时切换更详细级别; panic/未捕获异常消息转写日志; 终端保留 info 输出便于观察.
 - 日志内容优先覆盖: 用户操作与关键外部输入 (托盘点击, 菜单命令, 设置变更, 窗口显隐等), 便于审计和复现; 主要执行阶段与阶段耗时 (服务启停, 更新检查与下载等), 便于判断进程是否卡住; 关键数据变化和统计指标; 错误, 异常分支与必要上下文, 便于定位根因; 运行环境和资源信息.
 - 层级按重要性区分: 关键流程 info, 细节诊断 debug 或 trace, 错误和异常分支包含足够上下文. 计算密集型短流程减少高频日志, 避免拖慢运行; 长时间后台任务 (更新下载, 同步, 批处理等) 必须阶段性输出进度, 防止卡死却无从判断.
@@ -108,7 +108,12 @@ debug:
   - 安装包是 `-setup.tar.gz`, 内含 `install.sh` 与 `payload/`; `install.sh` 幂等, 支持 `--silent` (非交互, 供应用内升级调用), `--prefix` (默认 `$HOME/.local`), `--wait-pid <pid>`, `--log <path>`, `--result-file <path>`, `--uninstall`.
   - 安装与升级共用同一个 `install.sh`: 升级按整目录交换而不是逐文件覆盖, 新版新增与移除的文件因此自然对齐, 详见 `references/auto-update.md`.
   - 脚本只调用确实存在的外部工具 (如 `update-desktop-database`), 工具缺失或调用失败只记日志; 不修改用户的 shell 配置, 也不要求用户手工改 PATH, 只在 `~/.local/bin` 不在 PATH 时提示一次.
-- 数据目录与程序目录分离: 安装版的用户数据 (配置, 状态, 日志, 更新缓存) 走平台用户数据目录, Windows 为 `%APPDATA%\<App>`, Linux 为 `$XDG_DATA_HOME/<app>` (默认 `~/.local/share/<app>`); 环境变量覆盖仍然优先. 安装, 升级与卸载流程都不触碰数据目录.
+- 数据目录与程序目录分离: 安装版的用户数据 (配置, 状态, 更新缓存) 走平台用户数据目录; 环境变量覆盖仍然优先. 安装, 升级与卸载流程都不触碰数据目录与日志目录.
+  - Windows 为 `%APPDATA%\<App>`; Linux 为 `$XDG_DATA_HOME/<app>` (默认 `~/.local/share/<app>`). 这两端的日志默认仍写在数据目录内.
+  - macOS 持久数据为 `~/Library/Application Support/<Bundle ID>/`, 可再生成缓存为 `~/Library/Caches/<Bundle ID>/`, 日志为 `~/Library/Logs/<Bundle ID>/`. 子目录名用 Bundle ID, 与 Info.plist 一致.
+  - macOS 路径必须用跟随 `$HOME` 的平台 API 解析后再拼 Bundle ID 或应用 id (Go 的 `UserConfigDir` / `UserCacheDir` / `UserHomeDir`, Rust 的 `directories` / `dirs`, 或框架等价物). 禁止手写 `~/Library/Containers/...`, 禁止用 `getpwuid` 的真实家目录.
+  - macOS 只打成 `.app` 不会改 `$HOME`, 也不会自动进入容器. macOS 安装版 GUI 默认必须打开 App Sandbox; 开沙盒后系统改写 `$HOME`, 同一套路径代码自动落到容器内, 不为沙盒分叉.
+  - `just debug` 与终端直接跑的二进制不开沙盒, 继续用环境变量隔离数据目录与日志路径.
 
 ### 便携版 (可选形态)
 
