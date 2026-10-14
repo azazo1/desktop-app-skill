@@ -119,8 +119,9 @@ debug:
   - Windows 为 `%APPDATA%\<App>`; Linux 为 `$XDG_DATA_HOME/<app>` (默认 `~/.local/share/<app>`). 这两端的日志默认仍写在数据目录内.
   - macOS 持久数据为 `~/Library/Application Support/<Bundle ID>/`, 可再生成缓存为 `~/Library/Caches/<Bundle ID>/`, 日志为 `~/Library/Logs/<Bundle ID>/`. 子目录名用 Bundle ID, 与 Info.plist 一致.
   - macOS 路径必须用跟随 `$HOME` 的平台 API 解析后再拼 Bundle ID 或应用 id (Go 的 `UserConfigDir` / `UserCacheDir` / `UserHomeDir`, Rust 的 `directories` / `dirs`, 或框架等价物). 禁止手写 `~/Library/Containers/...`, 禁止用 `getpwuid` 的真实家目录.
-  - macOS 只打成 `.app` 不会改 `$HOME`, 也不会自动进入容器. macOS 安装版 GUI 默认必须打开 App Sandbox; 开沙盒后系统改写 `$HOME`, 同一套路径代码自动落到容器内, 不为沙盒分叉.
-  - `just debug` 与终端直接跑的二进制不开沙盒, 继续用环境变量隔离数据目录与日志路径.
+  - macOS 只打成 `.app` 不会改 `$HOME`, 也不会自动进入容器. macOS 安装版 GUI 默认不开 App Sandbox: 自行分发 (dmg) 不强制沙盒, 而沙盒应用无法替换安装在 `/Applications` 下的 bundle, 自动更新会退化成引导用户手动拖拽安装 (见 `references/auto-update.md`).
+  - 项目确实要开沙盒时 (例如要上架 Mac App Store), 路径代码不为它分叉: 沙盒下系统会改写 `$HOME`, 上面那条 "跟随 `$HOME` 解析再拼 Bundle ID" 的写法在两种形态下都成立, 不要按是否沙盒分支.
+  - `just debug` 与终端直接跑的二进制继续用环境变量隔离数据目录与日志路径.
 
 ### 便携版 (可选形态)
 
@@ -130,8 +131,9 @@ debug:
 
 ## 自动更新
 
-- 安装版必须带自动更新: 启动静默检查与手动检查, 下载带 SHA256 校验, 完成后可重启生效.
-- 安装版的落地交给平台安装器: Windows 静默运行新版 `-setup.exe`, Linux 静默运行新版 `-setup.tar.gz` 内的 `install.sh`, macOS 沿用 dmg 与脱离进程的替换脚本. 安装器按整目录替换全部程序文件, 因此新版新增的 dll 与资源文件会被补齐, 新版移除的文件会被清理, 不再依赖 "替换单个可执行文件" 的做法.
+- 安装版必须带自动更新: 启动静默检查与手动检查, 下载带 SHA256 校验, 完成后可重启生效 (macOS 沙盒构建只能停到手动安装, 见下).
+- 安装版的落地交给平台安装器: Windows 静默运行新版 `-setup.exe`, Linux 静默运行新版 `-setup.tar.gz` 内的 `install.sh`, macOS 的非沙盒构建沿用 dmg 与脱离进程的替换脚本. 安装器按整目录替换全部程序文件, 因此新版新增的 dll 与资源文件会被补齐, 新版移除的文件会被清理, 不再依赖 "替换单个可执行文件" 的做法.
+- macOS 沙盒构建做不了自动替换: 沙盒应用派生的子进程会继承沙盒, 因此写不了 `/Applications`; 应用自己生成的替换脚本还会带上 quarantine 属性被 Gatekeeper 拦下. 项目坚持开沙盒时, 自动更新只走到 "安装包已下载", 由用户确认后打开 dmg 手动拖拽安装, 详见 `references/auto-update.md` 的 macos 小节.
 - 下载完成不得自动退出或自动重启: 应用停在 "等待重启" 状态继续正常运行, 由用户点击 "重启并更新" 按钮才执行安装器交接与重启.
 - 项目提供可选便携版时, 其更新沿用解包归档替换自身可执行文件的语义, 只在单文件载荷下成立, 见 `references/auto-update.md` 的便携版小节; 主线实现不需要为它预留分支.
 - 发布侧的产物命名, 变体段, SHA256SUMS 生成与版本 tag 流程由 create-github-release-flow skill 保证; 应用内 (客户端) 侧的机制设计见 `references/auto-update.md`, 实现前先通读.
